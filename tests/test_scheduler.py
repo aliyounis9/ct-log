@@ -1,6 +1,5 @@
 import pytest
-
-from ctlog.network import Scheduler
+from ctlog.scheduler import Scheduler
 
 
 def record(scheduler, history, name):
