@@ -63,7 +63,7 @@ class Network:
         self._scheduler = scheduler
         self._random_generator = random.Random(seed)
         self._conditions = conditions
-        self._stats = {
+        self._stats: dict[str, int] = {
             "sent": 0,
             "delivered": 0,
             "dropped": 0,
@@ -75,7 +75,7 @@ class Network:
         """Replace the fault conditions for messages from now on."""
         self._conditions = conditions
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, int]:
         return self._stats.copy()
 
     def _make_endpoint(self, node_id: str) -> Endpoint:
@@ -87,7 +87,7 @@ class Network:
         if node.node_id in self._handlers:
             raise ValueError(f"Node {node.node_id} already exists on the network.")
         endpoint = self._make_endpoint(node.node_id)
-        node.endpoint = endpoint
+        node.set_endpoint(endpoint)
         self._handlers[node.node_id] = node.on_message
 
     def _send(self, frm: str, to: str, msg: dict) -> None:

@@ -8,7 +8,7 @@ class Scheduler:
     def __init__(self) -> None:
         self._time = 0  # current simulated time in ms
         self._count = 0  # increasing counter to break ties between equal times
-        self._tasks = []  # heap of (task_time_ms, count, callback)
+        self._tasks: list[tuple[int, int, Callable[[], None]]] = []  # heap of (task_time_ms, count, callback)
 
     def time_ms(self) -> int:
         return self._time
