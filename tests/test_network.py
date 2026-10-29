@@ -11,6 +11,8 @@ def make_network(seed=0, **conditions):
     b = Mock(node_id="b")
     network.connect(a)
     network.connect(b)
+    a.endpoint = a.set_endpoint.call_args.args[0]
+    b.endpoint = b.set_endpoint.call_args.args[0]
     return scheduler, network, a, b
 
 
