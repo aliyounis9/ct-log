@@ -25,6 +25,7 @@ class TotalOrderBroadcast:
         self._pending: list[tuple[int, str, dict]] = []
         members = (node_id, *self._peers)
         self._latest_ts: dict[str, int] = {member: 0 for member in members}
+        self._heartbeats_received = 0
 
     def _build_body(self, category: str, entry: dict | None = None) -> dict:
         msg_body = {
@@ -48,6 +49,9 @@ class TotalOrderBroadcast:
         self._send_down(msg_body)
 
     def _is_safe_to_deliver(self, timestamp: int, origin: str) -> bool:
+        return not self._waiting_for(timestamp, origin)
+
+    def _waiting_for(self, timestamp: int, origin: str) -> list[str]:
         # It's only safe to deliver a message if it has a timestamp
         # that's not bigger than than other nodes' latest timestamps
         # But we can safely exclude the origin since its own messages are guaranteed
@@ -56,11 +60,34 @@ class TotalOrderBroadcast:
         # so they're already in the heap, and anything it sends later gets a bigger
         # timestamp since receiving this message already pushed its clock past it
 
+        waiting = []
         for node, latest_ts in self._latest_ts.items():
             if node != self._node_id and node != origin and latest_ts < timestamp:
-                return False
+                waiting.append(node)
+        return waiting
 
-        return True
+    def snapshot(self) -> dict:
+        latest = {}
+        for node, latest_ts in self._latest_ts.items():
+            if node != self._node_id:
+                latest[node] = latest_ts
+
+        pending = []
+        for timestamp, origin, entry in sorted(self._pending):
+            pending.append(
+                {
+                    "timestamp": timestamp,
+                    "origin": origin,
+                    "entry": entry,
+                    "waiting_for": self._waiting_for(timestamp, origin),
+                }
+            )
+        return {
+            "clock": self._lamport_clock,
+            "latest": latest,
+            "heartbeats_received": self._heartbeats_received,
+            "pending": pending,
+        }
 
     def _deliver_safe_entries(self) -> None:
         while self._pending and self._is_safe_to_deliver(
@@ -78,7 +105,10 @@ class TotalOrderBroadcast:
 
         if body["category"] == "data":
             heapq.heappush(self._pending, (timestamp, origin, body["entry"]))
-        elif body["category"] != "heartbeat":
+        elif body["category"] == "heartbeat":
+            if origin != self._node_id:
+                self._heartbeats_received += 1
+        else:
             raise ValueError(f"Unknown body category: {body['category']}")
 
         self._deliver_safe_entries()

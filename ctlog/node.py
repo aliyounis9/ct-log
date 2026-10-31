@@ -76,6 +76,14 @@ class Node:
     def entries(self) -> list[dict]:
         return [self._log.get_entry_at(i) for i in range(len(self._log))]
 
+    def status(self) -> dict:
+        return {
+            "state": self._state.name.lower(),
+            "log_size": len(self._log),
+            "fifo": self._fifo.snapshot(),
+            "tob": self._tob.snapshot(),
+        }
+
     def _fifo_to_network(self, to: str, msg: dict) -> None:
         if self._state is NodeState.CRASHED:
             return

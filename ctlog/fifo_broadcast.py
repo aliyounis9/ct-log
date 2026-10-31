@@ -23,6 +23,9 @@ class FIFOBroadcast:
         members = (node_id, *self._peers)
         self._history: dict[str, dict[int, dict]] = {member: {} for member in members}
         self._next_expected: dict[str, int] = {member: 1 for member in members}
+        self._duplicates_ignored = 0
+        self._resent = 0
+        self._statuses_received = 0
 
     def broadcast(self, body: dict) -> None:
         msg = {
@@ -44,16 +47,17 @@ class FIFOBroadcast:
 
     def send_status(self) -> None:
         """Tell every peer, for each origin, the last seq I have with no gaps before it."""
-        have = {origin: seq - 1 for origin, seq in self._next_expected.items()}
-        status = {"type": "status", "sender": self._node_id, "have": have}
+        status = {"type": "status", "sender": self._node_id, "have": self._have()}
         for peer in self._peers:
             self._send_down(peer, status)
 
     def _on_status(self, msg: dict) -> None:
         """Resend to the sender every message it reported it doesn't have yet."""
+        self._statuses_received += 1
         for origin, their_last_seq in msg["have"].items():
             for seq in sorted(self._history[origin]):
                 if seq > their_last_seq:
+                    self._resent += 1
                     self._send_down(msg["sender"], self._history[origin][seq])
 
     def _accept(self, msg: dict) -> None:
@@ -61,6 +65,7 @@ class FIFOBroadcast:
         msg_origin = msg["origin"]
         msg_seq = msg["seq"]
         if msg_seq in self._history[msg_origin]:
+            self._duplicates_ignored += 1
             return
         self._history[msg_origin][msg_seq] = msg
 
@@ -74,6 +79,25 @@ class FIFOBroadcast:
             ]
             self._next_expected[msg_origin] += 1
             self._deliver_up(msg_origin, ready_to_deliver_message["body"])
+
+    def snapshot(self) -> dict:
+        parked = {}
+        for origin, messages in self._history.items():
+            parked[origin] = []
+            for seq in sorted(messages):
+                if seq >= self._next_expected[origin]:
+                    parked[origin].append(seq)
+        return {
+            "have": self._have(),
+            "parked": parked,
+            "duplicates_ignored": self._duplicates_ignored,
+            "resent": self._resent,
+            "statuses_received": self._statuses_received,
+        }
+
+    def _have(self) -> dict[str, int]:
+        # the last seq I have from each origin with no gaps before it
+        return {origin: seq - 1 for origin, seq in self._next_expected.items()}
 
     def _relay(self, msg: dict) -> None:
         for peer in self._peers:
