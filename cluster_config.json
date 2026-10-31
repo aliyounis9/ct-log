@@ -1,0 +1,4 @@
+{
+  "nodes": {"a": 9001, "b": 9002, "c": 9003, "d": 9004, "e": 9005},
+  "network": {"drop_probability": 0.9, "duplicate_probability": 0.8, "latency_ms": [10, 500]}
+}
