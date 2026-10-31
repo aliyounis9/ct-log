@@ -1,5 +1,5 @@
 import pytest
-from ctlog.scheduler import Scheduler
+from ctlog.sim.scheduler import SimScheduler
 
 
 def record(scheduler, history, name):
@@ -8,7 +8,7 @@ def record(scheduler, history, name):
 
 
 def test_events_run_in_time_order():
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     history = []
     scheduler.call_later(30, record(scheduler, history, "a"))
     scheduler.call_later(10, record(scheduler, history, "c"))
@@ -18,7 +18,7 @@ def test_events_run_in_time_order():
 
 
 def test_equal_time_events_run_in_scheduling_order():
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     history = []
     for name in ["a", "b", "c"]:
         scheduler.call_later(10, record(scheduler, history, name))
@@ -27,7 +27,7 @@ def test_equal_time_events_run_in_scheduling_order():
 
 
 def test_callback_can_schedule_another_event():
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     history = []
 
     def parent():
@@ -41,7 +41,7 @@ def test_callback_can_schedule_another_event():
 
 
 def test_run_until_stops_at_max():
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     history = []
     scheduler.call_later(10, record(scheduler, history, "early"))
     scheduler.call_later(500, record(scheduler, history, "late"))
@@ -54,6 +54,6 @@ def test_run_until_stops_at_max():
 
 
 def test_negative_delay_raises_value_error():
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     with pytest.raises(ValueError):
         scheduler.call_later(-1, lambda: None)

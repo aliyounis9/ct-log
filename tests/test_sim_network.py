@@ -1,11 +1,12 @@
 import pytest
 from unittest.mock import Mock
-from ctlog.scheduler import Scheduler
-from ctlog.network import Network, NetworkConditions
+from ctlog.faults import NetworkConditions
+from ctlog.sim.network import Network
+from ctlog.sim.scheduler import SimScheduler
 
 
 def make_network(seed=0, **conditions):
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     network = Network(scheduler, seed=seed, conditions=NetworkConditions(**conditions))
     a = Mock(node_id="a")
     b = Mock(node_id="b")
@@ -114,20 +115,6 @@ def test_bad_sends_and_connects_raise():
     with pytest.raises(TypeError):  # a set is not JSON-serializable
         a.endpoint.send("b", {"x": {1, 2}})
     assert network.get_stats()["sent"] == 0
-
-
-@pytest.mark.parametrize(
-    "conditions",
-    [
-        {"drop_probability": -0.1},
-        {"duplicate_probability": 1.5},
-        {"latency_ms": (-1, 10)},
-        {"latency_ms": (50, 10)},
-    ],
-)
-def test_invalid_conditions_raise(conditions):
-    with pytest.raises(ValueError):
-        NetworkConditions(**conditions)
 
 
 def test_stats_add_up():

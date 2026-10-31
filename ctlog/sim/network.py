@@ -1,11 +1,12 @@
-from typing import Callable
-import random
-from dataclasses import dataclass
 import json
-from ctlog.scheduler import Scheduler
+import random
+from typing import Callable
+
+from ctlog.faults import NetworkConditions, fault_delays
+from ctlog.interfaces import Scheduler
 
 
-class Endpoint:
+class SimEndpoint:
     """A node's connection to the network, through which
     it can only send messages to others."""
 
@@ -15,33 +16,6 @@ class Endpoint:
 
     def send(self, to: str, msg: dict) -> None:
         self._network._send(self._node_id, to, msg)
-
-
-@dataclass(frozen=True)
-class NetworkConditions:
-    """Fault settings for the network.
-
-    drop_probability: chance a message is lost.
-    latency_ms: (min, max) delay in ms, picked at random for each message.
-    duplicate_probability: chance a message that wasn't dropped is
-        delivered a second time, 1 to 100 ms after the first copy.
-    """
-
-    drop_probability: float = 0.0
-    latency_ms: tuple[int, int] = (30, 80)
-    duplicate_probability: float = 0.0
-
-    def __post_init__(self) -> None:
-        for name in ("drop_probability", "duplicate_probability"):
-            value = getattr(self, name)
-            if not 0 <= value <= 1:
-                raise ValueError(f"{name} must be between 0 and 1; got {value}")
-
-        low, high = self.latency_ms
-        if low < 0 or low > high:
-            raise ValueError(
-                f"latency_ms must be (min, max) with 0 <= min <= max; got {self.latency_ms}"
-            )
 
 
 class Network:
@@ -78,8 +52,8 @@ class Network:
     def get_stats(self) -> dict[str, int]:
         return self._stats.copy()
 
-    def _make_endpoint(self, node_id: str) -> Endpoint:
-        return Endpoint(self, node_id)
+    def _make_endpoint(self, node_id: str) -> SimEndpoint:
+        return SimEndpoint(self, node_id)
 
     def connect(self, node: "Node") -> None:
         """Give the node an endpoint to send with, and register
@@ -103,17 +77,10 @@ class Network:
 
         self._stats["sent"] += 1
 
-        latencies = [self._random_generator.randint(*self._conditions.latency_ms)]
-
-        if self._random_generator.random() < self._conditions.drop_probability:
-            latencies = []
+        latencies = fault_delays(self._conditions, self._random_generator)
+        if not latencies:
             self._stats["dropped"] += 1
-
-        if (
-            latencies
-            and self._random_generator.random() < self._conditions.duplicate_probability
-        ):
-            latencies.append((latencies[0] + self._random_generator.randint(1, 100)))
+        elif len(latencies) == 2:
             self._stats["duplicated"] += 1
 
         for time_from_now in latencies:

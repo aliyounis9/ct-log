@@ -2,8 +2,9 @@ import random
 import string
 from functools import partial
 import pytest
-from ctlog.scheduler import Scheduler
-from ctlog.network import Network, NetworkConditions
+from ctlog.faults import NetworkConditions
+from ctlog.sim.network import Network
+from ctlog.sim.scheduler import SimScheduler
 from ctlog.node import Node
 
 IDS = ["a", "b", "c"]
@@ -29,7 +30,7 @@ NETWORKS = [
 def make_cluster(seed=0, start_timers=True, num_nodes=3, **conditions):
     ids = list(string.ascii_lowercase[:num_nodes])
     seeds = random.Random(seed)
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     network = Network(
         scheduler,
         seed=seeds.randrange(SEED_RANGE),

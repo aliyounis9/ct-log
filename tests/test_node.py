@@ -1,15 +1,15 @@
 import pytest
 from unittest.mock import Mock
-from ctlog.network import Endpoint
+from ctlog.interfaces import Endpoint
 from ctlog.node import Node, NodeState
-from ctlog.scheduler import Scheduler
+from ctlog.sim.scheduler import SimScheduler
 
 CERT = {"domain": "minerva.edu", "issuer": "Let's Encrypt"}
 
 
 def make_node():
     """Node "a" with peers "b" and "c", connected to a fake endpoint instead of a network."""
-    scheduler = Scheduler()
+    scheduler = SimScheduler()
     node = Node("a", ["a", "b", "c"], scheduler)
     endpoint = Mock(spec=Endpoint)
     node.set_endpoint(endpoint)
@@ -56,7 +56,7 @@ def test_each_tick_sends_status_and_heartbeat():
 
 
 def test_submit_before_connecting_raises():
-    node = Node("a", ["a", "b", "c"], Scheduler())
+    node = Node("a", ["a", "b", "c"], SimScheduler())
     with pytest.raises(RuntimeError):
         node.submit(CERT)
 

@@ -1,10 +1,10 @@
 import random
 from enum import Enum, auto
+from typing import Callable
 
 from ctlog.fifo_broadcast import FIFOBroadcast
 from ctlog.log import Log, encode_entry
-from ctlog.network import Endpoint
-from ctlog.scheduler import Scheduler
+from ctlog.interfaces import Endpoint, Scheduler
 from ctlog.total_order_broadcast import TotalOrderBroadcast
 
 
@@ -25,6 +25,7 @@ class Node:
         scheduler: Scheduler,
         seed: int = 0,
         tick_interval_ms: int = 100,
+        on_new_entry: Callable[[dict], None] | None = None,
     ) -> None:
         self.node_id = node_id
         self._endpoint: Endpoint | None = None
@@ -33,6 +34,7 @@ class Node:
         self._tick_interval_ms = tick_interval_ms
         self._random_generator = random.Random(seed)
         self._state = NodeState.RUNNING
+        self._on_new_entry = on_new_entry
         self._fifo = FIFOBroadcast(
             node_id,
             peers,
@@ -89,6 +91,8 @@ class Node:
 
     def _tob_to_node(self, entry: dict) -> None:
         self._log.append_entry(entry)
+        if self._on_new_entry is not None:
+            self._on_new_entry(entry)
 
     def _schedule_tick(self) -> None:
         self._scheduler.call_later(self._random_tick_delay(), self._on_tick)
