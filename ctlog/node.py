@@ -1,15 +1,22 @@
 import random
+from enum import Enum, auto
 
 from ctlog.fifo_broadcast import FIFOBroadcast
 from ctlog.log import Log, encode_entry
 from ctlog.network import Endpoint
 from ctlog.scheduler import Scheduler
+from ctlog.total_order_broadcast import TotalOrderBroadcast
+
+
+class NodeState(Enum):
+    RUNNING = auto()
+    CRASHED = auto()
 
 
 class Node:
-    """The network connects to it; it connects the fifo
-    broadcast to its log. uses the scheduler to send
-    status updates regularly."""
+    """The network connects to it; it connects the fifo broadcast,
+    the total order broadcast and its log. uses the scheduler to send
+    status updates and heartbeats regularly."""
 
     def __init__(
         self,
@@ -17,48 +24,81 @@ class Node:
         peers: list[str],
         scheduler: Scheduler,
         seed: int = 0,
-        status_interval_ms: int = 100,
+        tick_interval_ms: int = 100,
     ) -> None:
         self.node_id = node_id
         self._endpoint: Endpoint | None = None
         self._log = Log()
         self._scheduler = scheduler
-        self._status_interval_ms = status_interval_ms
+        self._tick_interval_ms = tick_interval_ms
         self._random_generator = random.Random(seed)
-        self._fifo = FIFOBroadcast(node_id, peers, self._send, self._on_deliver)
+        self._state = NodeState.RUNNING
+        self._fifo = FIFOBroadcast(
+            node_id,
+            peers,
+            send_down=self._fifo_to_network,
+            deliver_up=self._fifo_to_tob,
+        )
+        self._tob = TotalOrderBroadcast(
+            node_id,
+            peers,
+            send_down=self._tob_to_fifo,
+            deliver_up=self._tob_to_node,
+        )
 
     def set_endpoint(self, endpoint: Endpoint) -> None:
         self._endpoint = endpoint
 
+    @property
+    def state(self) -> NodeState:
+        return self._state
+
     def start_timers(self) -> None:
-        self._schedule_status()
+        self._schedule_tick()
+
+    def crash(self) -> None:
+        """Stop for good: ignore incoming messages, send nothing, stop the timers."""
+        self._state = NodeState.CRASHED
 
     def submit(self, entry: dict) -> None:
+        if self._state is NodeState.CRASHED:
+            raise RuntimeError(f"Node {self.node_id} has crashed.")
         encode_entry(entry)
-        self._fifo.broadcast({"category": "data", "entry": entry})
+        self._tob.broadcast(entry)
 
     def on_message(self, msg: dict) -> None:
+        if self._state is NodeState.CRASHED:
+            return
         self._fifo.receive(msg)
 
     def entries(self) -> list[dict]:
         return [self._log.get_entry_at(i) for i in range(len(self._log))]
 
-    def _send(self, to: str, msg: dict) -> None:
+    def _fifo_to_network(self, to: str, msg: dict) -> None:
+        if self._state is NodeState.CRASHED:
+            return
         if self._endpoint is None:
             raise RuntimeError(f"Node {self.node_id} isn't connected to a network.")
         self._endpoint.send(to, msg)
 
-    def _on_deliver(self, origin: str, body: dict) -> None:
-        if body["category"] != "data":
-            raise ValueError(f"Unknown body category: {body['category']}")
-        self._log.append_entry(body["entry"])
+    def _tob_to_fifo(self, body: dict) -> None:
+        self._fifo.broadcast(body)
 
-    def _schedule_status(self) -> None:
-        self._scheduler.call_later(self._random_status_delay(), self._on_status_timer)
+    def _fifo_to_tob(self, origin: str, body: dict) -> None:
+        self._tob.receive(origin, body)
 
-    def _on_status_timer(self) -> None:
+    def _tob_to_node(self, entry: dict) -> None:
+        self._log.append_entry(entry)
+
+    def _schedule_tick(self) -> None:
+        self._scheduler.call_later(self._random_tick_delay(), self._on_tick)
+
+    def _on_tick(self) -> None:
+        if self._state is NodeState.CRASHED:
+            return
         self._fifo.send_status()
-        self._schedule_status()
+        self._tob.send_heartbeat()
+        self._schedule_tick()
 
-    def _random_status_delay(self) -> int:
-        return self._random_generator.randint(1, self._status_interval_ms)
+    def _random_tick_delay(self) -> int:
+        return self._random_generator.randint(1, self._tick_interval_ms)
