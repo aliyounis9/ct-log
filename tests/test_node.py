@@ -1,84 +1,100 @@
-import random
 import pytest
+from unittest.mock import Mock
+from ctlog.network import Endpoint
+from ctlog.node import Node, NodeState
 from ctlog.scheduler import Scheduler
-from ctlog.network import Network, NetworkConditions
-from ctlog.node import Node
 
-IDS = ["a", "b", "c"]
-SEED_RANGE = 1999
+CERT = {"domain": "minerva.edu", "issuer": "Let's Encrypt"}
 
-def make_cluster(seed=0, start_timers=True, **conditions):
-    seeds = random.Random(seed)
+
+def make_node():
+    """Node "a" with peers "b" and "c", connected to a fake endpoint instead of a network."""
     scheduler = Scheduler()
-    network = Network(
-        scheduler, seed=seeds.randrange(SEED_RANGE), conditions=NetworkConditions(**conditions)
-    )
-    nodes = [Node(node_id, IDS, scheduler, seed=seeds.randrange(SEED_RANGE)) for node_id in IDS]
-    for node in nodes:
-        network.connect(node)
-        if start_timers:
-            node.start_timers()
-    return scheduler, network, nodes
+    node = Node("a", ["a", "b", "c"], scheduler)
+    endpoint = Mock(spec=Endpoint)
+    node.set_endpoint(endpoint)
+    return scheduler, node, endpoint
 
 
-def submit_from_everyone(nodes, count):
-    for k in range(count):
-        for node in nodes:
-            node.submit({"domain": f"site{k}.com", "issuer": node.node_id})
+def sent(endpoint):
+    return [call.args for call in endpoint.send.call_args_list]
 
 
-def domains_from(node, issuer):
-    return [entry["domain"] for entry in node.entries() if entry["issuer"] == issuer]
-
-
-def test_entry_reaches_every_node():
-    scheduler, network, nodes = make_cluster()
-    a = nodes[0]
-    a.submit({"domain": "minerva.edu", "issuer": "a"})
-    assert a.entries() == [{"domain": "minerva.edu", "issuer": "a"}]
-
-    scheduler.run_until(1000)
-    for node in nodes:
-        assert node.entries() == [{"domain": "minerva.edu", "issuer": "a"}]
-
-
-def test_invalid_entry_is_rejected_before_sending():
-    scheduler, network, nodes = make_cluster()
+def test_invalid_entry_is_not_sent():
+    scheduler, node, endpoint = make_node()
     with pytest.raises(TypeError):
-        nodes[0].submit("minerva.edu")
+        node.submit("minerva.edu")
 
-    assert network.get_stats()["sent"] == 0
-    assert nodes[0].entries() == []
-
-
-@pytest.mark.parametrize(
-    "seed, conditions",
-    [
-        (0, {"duplicate_probability": 1.0}),
-        (
-            0,
-            {
-                "drop_probability": 0.3,
-                "duplicate_probability": 0.3,
-                "latency_ms": (1, 200),
-            },
-        ),
-        *[(seed, {"drop_probability": 0.9}) for seed in range(30)],
-    ],
-)
-def test_every_node_gets_every_entry_once_in_origin_order(seed, conditions):
-    scheduler, network, nodes = make_cluster(seed, **conditions)
-    submit_from_everyone(nodes, 50)
-    scheduler.run_until(50_000)
-
-    for node in nodes:
-        for issuer in IDS:
-            assert domains_from(node, issuer) == [f"site{k}.com" for k in range(50)]
+    endpoint.send.assert_not_called()
+    assert node.entries() == []
 
 
-def test_without_status_timers_lost_messages_are_never_repaired():
-    scheduler, network, nodes = make_cluster(start_timers=False, drop_probability=0.5)
-    submit_from_everyone(nodes, 10)
-    scheduler.run_until(5000)
+def test_submit_sends_to_every_peer():
+    scheduler, node, endpoint = make_node()
+    node.submit(CERT)
 
-    assert any(len(node.entries()) < 30 for node in nodes)
+    assert [to for to, _ in sent(endpoint)] == ["b", "c"]
+    for _, msg in sent(endpoint):
+        assert msg["body"]["entry"] == CERT
+
+
+def test_each_tick_sends_status_and_heartbeat():
+    scheduler, node, endpoint = make_node()
+    node.start_timers()
+    scheduler.run_until(1000)
+
+    statuses = [to for to, msg in sent(endpoint) if msg["type"] == "status"]
+    heartbeats = [
+        to
+        for to, msg in sent(endpoint)
+        if msg["type"] == "broadcast" and msg["body"]["category"] == "heartbeat"
+    ]
+    for peer in ["b", "c"]:
+        # each tick waits at most 100 ms so 1000/100 = 10
+        assert statuses.count(peer) >= 10
+        assert heartbeats.count(peer) == statuses.count(peer)
+
+
+def test_submit_before_connecting_raises():
+    node = Node("a", ["a", "b", "c"], Scheduler())
+    with pytest.raises(RuntimeError):
+        node.submit(CERT)
+
+
+def test_crashed_node_rejects_submit():
+    scheduler, node, endpoint = make_node()
+    assert node.state is NodeState.RUNNING
+
+    node.crash()
+    assert node.state is NodeState.CRASHED
+    with pytest.raises(RuntimeError):
+        node.submit(CERT)
+    endpoint.send.assert_not_called()
+
+
+def test_crashed_node_ignores_messages():
+    scheduler, node, endpoint = make_node()
+    status_from_b = {"type": "status", "sender": "b", "have": {"a": 0, "b": 0, "c": 0}}
+    node.submit(CERT)
+    assert [to for to, _ in sent(endpoint)] == ["b", "c"]
+    endpoint.reset_mock()
+
+    # b says it has nothing from a --> a resends CERT to b
+    node.on_message(status_from_b)
+    assert [to for to, _ in sent(endpoint)] == ["b"]
+    endpoint.reset_mock()
+
+    node.crash()
+    node.on_message(status_from_b)
+    endpoint.send.assert_not_called()
+
+
+def test_crashed_node_stops_ticking():
+    scheduler, node, endpoint = make_node()
+    node.start_timers()
+    scheduler.run_until(500)
+    node.crash()
+    endpoint.reset_mock()
+
+    scheduler.run_until(10_000)
+    endpoint.send.assert_not_called()
