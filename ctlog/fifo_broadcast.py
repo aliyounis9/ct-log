@@ -9,16 +9,16 @@ class FIFOBroadcast:
         self,
         node_id: str,
         peers: list[str],
-        send: Callable[[str, dict], None],
-        on_deliver: Callable[[str, dict], None],
+        send_down: Callable[[str, dict], None],
+        deliver_up: Callable[[str, dict], None],
     ) -> None:
-        """send(to, msg) puts a message on the network.
-        on_deliver(origin, body) is called for each message that is ready,
+        """send_down(to, msg) puts a message on the network.
+        deliver_up(origin, body) is called for each message that is ready,
         in the order its origin sent it."""
         self._node_id = node_id
         self._peers = tuple(peer for peer in peers if peer != node_id)
-        self._send = send
-        self._on_deliver = on_deliver
+        self._send_down = send_down
+        self._deliver_up = deliver_up
         self._next_sequence = 1
         members = (node_id, *self._peers)
         self._history: dict[str, dict[int, dict]] = {member: {} for member in members}
@@ -47,14 +47,14 @@ class FIFOBroadcast:
         have = {origin: seq - 1 for origin, seq in self._next_expected.items()}
         status = {"type": "status", "sender": self._node_id, "have": have}
         for peer in self._peers:
-            self._send(peer, status)
+            self._send_down(peer, status)
 
     def _on_status(self, msg: dict) -> None:
         """Resend to the sender every message it reported it doesn't have yet."""
         for origin, their_last_seq in msg["have"].items():
             for seq in sorted(self._history[origin]):
                 if seq > their_last_seq:
-                    self._send(msg["sender"], self._history[origin][seq])
+                    self._send_down(msg["sender"], self._history[origin][seq])
 
     def _accept(self, msg: dict) -> None:
         """Ignore duplicates; store, relay, and (if applicable) deliver messages in order."""
@@ -73,9 +73,9 @@ class FIFOBroadcast:
                 self._next_expected[msg_origin]
             ]
             self._next_expected[msg_origin] += 1
-            self._on_deliver(msg_origin, ready_to_deliver_message["body"])
+            self._deliver_up(msg_origin, ready_to_deliver_message["body"])
 
     def _relay(self, msg: dict) -> None:
         for peer in self._peers:
             if peer != msg["origin"]:
-                self._send(peer, msg)
+                self._send_down(peer, msg)
